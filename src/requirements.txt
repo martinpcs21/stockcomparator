@@ -1,7 +1,7 @@
 pandas
 numpy
 bs4
-sqlAlchemy
+SQLAlchemy
 sklearn
 yahooquery
 streamlit
