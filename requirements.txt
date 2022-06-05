@@ -6,4 +6,3 @@ sklearn
 yahooquery
 streamlit
 matplotlib
-os
