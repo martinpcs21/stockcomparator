@@ -1,0 +1,4 @@
+# PyCharm IDE
+.idea
+# Virtual Environment files
+venv

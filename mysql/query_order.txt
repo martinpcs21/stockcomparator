@@ -1,0 +1,5 @@
+db_schema.sql
+db_insert_pks.sql
+db_insert_companyvariables.sql
+db_insert_fundamentalanalysis.sql
+db_insert_annualreports.sql
