@@ -5,3 +5,4 @@ SQLAlchemy
 sklearn
 yahooquery
 streamlit
+matplotlib
