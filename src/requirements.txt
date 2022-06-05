@@ -7,4 +7,3 @@ yahooquery
 streamlit
 matplotlib
 pip
-os
