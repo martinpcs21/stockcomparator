@@ -30,7 +30,8 @@ try:
     conn = sqlite3.connect(db_path)
     print(db_path)
     cur = conn.cursor()
-    print(os.path.join('sqlite:///','../db/', db_name))
+    engine_path=os.path.join('sqlite:///', '../db/', db_name)
+    print(engine_path)
     engine = create_engine(os.path.join('sqlite:///','../db/', db_name))
 
 except sqlite3.Error as error:
