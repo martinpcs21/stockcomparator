@@ -22,7 +22,7 @@ db_name = 'Fundamentals.db'
 
 cwd = os.getcwd()  # current working directory
 db_path = os.path.normpath(os.path.join(cwd, '../db', db_name))  # build normalized path to access db
-db_path = 'app/stockcomparator/scr/db/Fundamentals.db'
+db_path = '/app/stockcomparator/scr/db/Fundamentals.db'
 # check if SQLite .db file exists !
 if not os.path.isfile(db_path):
     raise Exception("DB not found! SQLite .db file does not exist in folder: {0}".format(db_path))
