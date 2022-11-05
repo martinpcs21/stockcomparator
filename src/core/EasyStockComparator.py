@@ -30,7 +30,7 @@ if not os.path.isfile(db_path):
 try:
     conn = sqlite3.connect(db_path)
     cur = conn.cursor()
-    engine = create_engine(os.path.join('sqlite:///','../db/', db_name))
+    engine = create_engine('sqlite:///app/stockcomparator/src/db/Fundamentals.db')
 
 except sqlite3.Error as error:
     print("Error while connecting to sqlite", error)
