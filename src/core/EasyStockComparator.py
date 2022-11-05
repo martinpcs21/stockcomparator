@@ -22,17 +22,18 @@ db_name = 'Fundamentals.db'
 
 cwd = os.getcwd()  # current working directory
 db_path = os.path.normpath(os.path.join(cwd, '../db', db_name))  # build normalized path to access db
+db_path = 'app/stockcomparator/scr/db/Fundamentals.db'
 # check if SQLite .db file exists !
-# if not os.path.isfile(db_path):
-#     raise Exception("DB not found! SQLite .db file does not exist in folder: {0}".format(db_path))
+if not os.path.isfile(db_path):
+    raise Exception("DB not found! SQLite .db file does not exist in folder: {0}".format(db_path))
 
-# try:
-conn = sqlite3.connect(db_path)
-cur = conn.cursor()
-engine = create_engine(os.path.join('sqlite:///','../db/', db_name))
+try:
+    conn = sqlite3.connect(db_path)
+    cur = conn.cursor()
+    engine = create_engine(os.path.join('sqlite:///','../db/', db_name))
 
-# except sqlite3.Error as error:
-#     print("Error while connecting to sqlite", error)
+except sqlite3.Error as error:
+    print("Error while connecting to sqlite", error)
 
 fundamental_analysis_query = get_select_query_string(table='SimpleAnalysis')
 fundamental_analysis_df = pd.read_sql_query(fundamental_analysis_query, engine)
