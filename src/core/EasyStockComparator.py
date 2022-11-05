@@ -21,17 +21,14 @@ db_name = 'Fundamentals.db'
 ### READ TABLES AND REFRAME ###
 
 cwd = os.getcwd()  # current working directory
-db_path = os.path.normpath(os.path.join(cwd, '..', '../src/db', db_name))  # build normalized path to access db
+db_path = os.path.normpath(os.path.join(cwd, '../db', db_name))  # build normalized path to access db
 # check if SQLite .db file exists !
 if not os.path.isfile(db_path):
     raise Exception("DB not found! SQLite .db file does not exist in folder: {0}".format(db_path))
 
 try:
     conn = sqlite3.connect(db_path)
-    print(db_path)
     cur = conn.cursor()
-    engine_path=os.path.join('sqlite:///', '../db/', db_name)
-    print(engine_path)
     engine = create_engine(os.path.join('sqlite:///','../db/', db_name))
 
 except sqlite3.Error as error:
