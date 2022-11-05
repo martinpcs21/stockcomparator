@@ -21,7 +21,7 @@ db_name = 'Fundamentals.db'
 ### READ TABLES AND REFRAME ###
 
 cwd = os.getcwd()  # current working directory
-db_path = os.path.normpath(os.path.join(cwd, '..', '../src/db', db_name))
+db_path = os.path.normpath(os.path.join(cwd, '..', '../db', db_name))
 print(db_path)# build normalized path to access db
 # check if SQLite .db file exists !
 if not os.path.isfile(db_path):
