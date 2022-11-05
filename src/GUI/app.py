@@ -45,7 +45,6 @@ fundamental_analysis_df= fundamental_analysis_df[['CurrentPrice','TargetPrice','
                          'LiquidityRatio','DebtQualityRatio','LiabilitiestoEquityRatio','DividendYield']]
 
 
-
 st.set_page_config(layout="wide")
 
 #Add sidebar to the app

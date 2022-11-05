@@ -10,13 +10,14 @@ import datetime as dt
 import sqlite3
 from sqlalchemy import *
 
-ticker_name='TSLA'
+ticker_name='CS'
 
 def df_to_database(ticker_name, df):
-    df=df.dropna(axis=1, how='any', thresh=4)
-    df = df.dropna(axis=0, how='any', thresh=len(df.columns))
+    df = df.apply(pd.to_numeric, errors='coerce')
+    df=df.dropna(axis='columns', how='any', thresh=12) #to avoid empty columns, at least 12 good values
+    df = df.dropna(axis='index', how='any', thresh=len(df.columns)) #all values present in the row
     years= df.columns.to_list()
-    index= pd.MultiIndex.from_product([[ticker_name],df.index,years], names=['Ticker','KPI','Year'])
+    index= pd.MultiIndex.from_product([[ticker_name],df.index,years], names=['Ticker','kpi','Year'])
     data=df.values.tolist()
     flat_list=[]
     for sublist in data:
@@ -78,6 +79,7 @@ filter_cash_flow= [
         'DeferredTax', 
         'Depreciation', 
         'DepreciationAndAmortization',
+        'EarningsLossesFromEquityInvestments',
         'FinancingCashFlow', 
         'FreeCashFlow',
         'InvestingCashFlow',
@@ -193,13 +195,13 @@ income_statement=income_statement[income_statement.index.isin(filter_income_stat
 
 # statement to database
 cash_flow_db = df_to_database(ticker_name, cash_flow)
-cash_flow_db['KPI']='annual'+cash_flow_db['KPI']
+cash_flow_db['kpi']='annual'+cash_flow_db['kpi']
 
 income_statement_db = df_to_database(ticker_name, income_statement)
-income_statement_db['KPI']='annual'+income_statement_db['KPI']
+income_statement_db['kpi']='annual'+income_statement_db['kpi']
 
 balance_sheet_db = df_to_database(ticker_name,  balance_sheet)
-balance_sheet_db['KPI']='annual'+balance_sheet_db['KPI']
+balance_sheet_db['kpi']='annual'+balance_sheet_db['kpi']
 
 #Current Price
 current_price = [tickers.price[ticker_name]['regularMarketPrice']]
@@ -314,20 +316,20 @@ try:
     #Company Variables
     
     try:
-        CompanyVariablesOld = pd.read_sql_table('Variables', engine)
+        CompanyVariablesOld = pd.read_sql_table('Companies', engine)
     except:
-        print('Empty Variables table')
+        print('Empty Companies table')
     
     try:
         if ticker_name in CompanyVariablesOld['Ticker'].tolist():
             print(CompanyVariablesOld['Ticker'])
             TickerToUpdateIndex = CompanyVariablesOld['Ticker'].tolist().index(ticker_name)
             CompanyVariablesOld.loc[TickerToUpdateIndex] = company_variables.loc[0]
-            CompanyVariablesOld.to_sql("Variables", conn, if_exists='replace', index=False)
+            CompanyVariablesOld.to_sql("Companies", conn, if_exists='replace', index=False)
         else:
-            company_variables.to_sql("Variables", conn, if_exists='append', index=False)
+            company_variables.to_sql("Companies", conn, if_exists='append', index=False)
     except:
-        company_variables.to_sql("Variables",conn, if_exists='append', index=False)
+        company_variables.to_sql("Companies",conn, if_exists='append', index=False)
 
     #Balance Sheet
     for i in range(len(balance_sheet_db)):

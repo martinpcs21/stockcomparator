@@ -3,19 +3,40 @@ import pandas as pd
 import numpy as np
 from sqlalchemy import create_engine
 import sqlite3
+import datetime
 
-def fundamental_analysis (ticker_name):
-    ordinary_shares_alternative = False
-
-    def get_select_query_string(table, stock):
+def fundamental_analysis (ticker_name, expected_growth):
+    def get_select_query_string(table, ticker):
         """
         Generate query string (SELECT)
         :param table: [string] name of the table
         :param stock: [string] stock code of the company
         :return: [string] SQL statement
         """
-        query_str = "SELECT * FROM " + table + " WHERE Ticker='" + stock + "';"
+        query_str = "SELECT * FROM " + table + " WHERE Ticker='" + ticker + "';"
         return query_str
+
+    def calculate_tendency(kpi, kpi_tendency, x_axis_matrix):
+        slope, c = np.linalg.lstsq(x_axis_matrix, Statement.loc[kpi][::-1], rcond=-1)[0]
+        try:
+            if Statement.loc[kpi].values[-1] > 0:
+                Fundamentals.loc[kpi_tendency] = slope / Statement.loc[kpi].values[-1]
+            else:
+                Fundamentals.loc[kpi_tendency] = slope / Statement.loc[kpi].mean()
+        except:
+            Fundamentals.loc[kpi_tendency] = 0
+
+    def df_to_exisiting_sql_db(df_old, df_to_db, table):
+        try:
+            if ticker_name in df_old['Ticker'].tolist():
+                print(df_old['Ticker'])
+                TickerToUpdateIndex = df_old['Ticker'].tolist().index(ticker_name)
+                df_old.loc[TickerToUpdateIndex] = df_to_db.loc[0]
+                df_old.to_sql(table, conn, if_exists='replace', index=False)
+            else:
+                df_to_db.to_sql(table, conn, if_exists='append', index=False)
+        except:
+            print('Could not connect to db')
 
     db_name = 'Fundamentals.db'
 
@@ -39,7 +60,7 @@ def fundamental_analysis (ticker_name):
 
     ## company variables: country, beta, sector ...
 
-    company_variables_query = get_select_query_string(table='Variables', stock=ticker_name)
+    company_variables_query = get_select_query_string(table='Companies', ticker=ticker_name)
     CompanyVariables = pd.read_sql_query(company_variables_query, engine)
     CompanyVariables = CompanyVariables.drop(["Ticker"], axis=1)
     CompanyVariables = CompanyVariables.squeeze()
@@ -58,8 +79,9 @@ def fundamental_analysis (ticker_name):
         'CHF': 1.08,
         'SEK': 0.11,
         'KRW': 0.00081,
-        'CHF': 0.9
-
+        'CHF': 0.9,
+        'TWD': 0.033,
+        'INR': 0.012
     }
 
     currency_to_usd_conversion_factor = currency_to_usd_dict[CompanyVariables['ReportCurrency']]
@@ -69,12 +91,12 @@ def fundamental_analysis (ticker_name):
     price_conversion_factor = stock_currency_to_usd_conversion_factor / report_currency_to_usd_conversion_factor
 
     ## current price
-    current_prices_query = get_select_query_string(table='CurrentPrice', stock=ticker_name)
+    current_prices_query = get_select_query_string(table='CurrentPrice', ticker=ticker_name)
     current_price = pd.read_sql_query(current_prices_query, engine)
     price = current_price['Price'][0] * price_conversion_factor
 
     ## historical price
-    company_prices_query = get_select_query_string(table='HistoricalPrices', stock=ticker_name)
+    company_prices_query = get_select_query_string(table='HistoricalPrices', ticker=ticker_name)
     companyPrices = pd.read_sql_query(company_prices_query, engine)
     companyPrices = companyPrices.T
     companyPrices.columns = companyPrices.loc['Year']
@@ -82,20 +104,36 @@ def fundamental_analysis (ticker_name):
     companyPrices.loc['MeanPrice'] = companyPrices.loc['MeanPrice'] * price_conversion_factor
     years_in_historical_price = companyPrices.columns.tolist()
 
+    ## sector industry multiples analysis
+    industry_query = "SELECT EVEBITDAMultiple, cyclical FROM Industry WHERE Industry='" + CompanyVariables[
+        'Industry'] + "';"
+    industry_multiple = pd.read_sql_query(industry_query, engine)
+    cyclical = bool(industry_multiple['cyclical'][0])
+
+    ## ordenary_shares_alternative
+    shares_alternative_query = get_select_query_string(table='OrdinarySharesAlternative', ticker=ticker_name)
+    shares_alternative_df = pd.read_sql_query(shares_alternative_query, engine)
+    try:
+        ordinary_shares_alternative = bool(shares_alternative_df['Alternative'][0])
+    except:
+        ordinary_shares_alternative = False
+
     ## previous existing fundamental analyis
     try:
         FundamentalAnalysisOld = pd.read_sql_table('FundamentalAnalysis', engine)
+        simpleAnalysisOld = pd.read_sql_table('SimpleAnalysis', engine)
+        expectedGrowthOld = pd.read_sql_table('ExpectedGrowth', engine)
         # FundamentalAnalysisOld = pd.read_sql_query('SELECT * FROM FundamentalAnalysis', conn)
     except:
         print('Empty FundamentalAnalysis table')
 
     ## annual report
-    annual_reports_query = get_select_query_string(table='AnnualReports', stock=ticker_name)
+    annual_reports_query = get_select_query_string(table='AnnualReports', ticker=ticker_name)
     tabledfquery = pd.read_sql_query(annual_reports_query, engine)
     tabledfqueryordered = tabledfquery.sort_values(by="Year")
     tabledfqueryordered = tabledfqueryordered.drop(["Ticker", "id"], axis=1)
-    tabledfqueryordered = tabledfqueryordered.set_index("KPI")
-    result = pd.pivot_table(tabledfqueryordered, values='Value', index=['KPI'], columns=['Year'])
+    tabledfqueryordered = tabledfqueryordered.set_index("kpi")
+    result = pd.pivot_table(tabledfqueryordered, values='Value', index=['kpi'], columns=['Year'])
     Statement = result.iloc[:, ::-1]  # reverse columns order
     statement_years = Statement.columns.tolist()
 
@@ -109,22 +147,29 @@ def fundamental_analysis (ticker_name):
     companyPrices = companyPrices.loc[:, ~companyPrices.columns.duplicated()]
     mean_price_per_year = (companyPrices.loc['MeanPrice'][::-1]).tolist()
 
-    ##### FUNDAMENTAL ANALYSIS ####
+    #####  FUNDAMENTAL ANALYSIS ####
 
     FundamentalsIndex = ['EPS',
+                         'FFO Funds From Operations per share',
                          'Debt-to-Equity Ratio',
                          'Quick ratio / acid test ratio',
                          'Current ratio',
                          'Book Value',
                          'Price to Book Value',
-                         'Cash/ Current Assets',
+                         'Price to Book Value at Year Reference Price',
+                         'Cash/ Total Assets',
                          'Cash per stock',
-                         'Debt to Equity Ratio',
                          'Debt Quality Ratio',
+                         'Liabilities to Assets',
+                         'Liabilities to Equity',
                          'ROCE Return On Capital Employed',
                          'ROA Return On Assets',
                          'ROE Return On Equity',
+                         'ROIC Return On Invested Capital',
                          'PER',
+                         'PFFO',  # Price / Funds From Operations per share --> For REIT Valuations
+                         'PER at Year Reference Price',
+                         'PFFO at Year Reference Price',
                          'FCFS Free Cash Flow per Stock',
                          'PayOut DPS/EPS',
                          'PFCF Price/ Free Cash Flow per Stock',
@@ -135,16 +180,19 @@ def fundamental_analysis (ticker_name):
                          'EV Enterprise Value / EBITDA',
                          'EV Enterprise Value / EBITDA at Year Reference Price',
                          'EV Enterprise Value / EBIT',
+                         'EV Enterprise Value / EBIT at Year Reference Price',
                          'P/CF Price/ Operating Cash Flow Rate',
                          'Interest Coverage Ratio EBIT/Interest Expense',
                          'Interest Expense/ EBIT',
                          'DSCR Asset Coverage Ratio',
                          'Net Debt to EBITDA',
+                         'Net Debt to Operating Cash Flow',
                          'EBITDA tendency',
                          'Net income tendency',
                          'Free Cash Flow tendency',
                          'Operating Cash Flow tendency',
                          'Equity tendency',
+                         'Operating Revenue tendency',
                          'Before Tax Cost of Debt',
                          'Tax Rate',
                          'After Tax Cost of Debt',
@@ -152,7 +200,9 @@ def fundamental_analysis (ticker_name):
                          'Cost of Equity CAPM Formula',
                          'Weighted Average Maturity',
                          'Market Value of Debt',
-                         'WACC Weighed Average Cost of Capital']
+                         'WACC Weighed Average Cost of Capital',
+                         'EBITDA Margin',
+                         'NetIncomeMargin']
 
     Fundamentals = pd.DataFrame(index=FundamentalsIndex, columns=Statement.columns)
 
@@ -164,7 +214,10 @@ def fundamental_analysis (ticker_name):
         Statement.loc['annualOrdinarySharesNumber'] = CompanyVariables.loc['SharesOutstanding']
 
     try:
-        AnnualNetDebt = Statement.loc['annualTotalDebt'] - Statement.loc['annualCashAndCashEquivalents']
+        if CompanyVariables['Sector'] == 'Financial Services':
+            AnnualNetDebt = 0 * Statement.loc['annualTotalDebt']
+        else:
+            AnnualNetDebt = Statement.loc['annualTotalDebt'] - Statement.loc['annualCashAndCashEquivalents']
     except:
         try:
             AnnualLongTermDebt = Statement.loc['annualLongTermDebt']
@@ -184,57 +237,87 @@ def fundamental_analysis (ticker_name):
     except:
         AnnualEquity = Statement.loc['annualCommonStockEquity']
 
+    Statement.loc['annualStockholdersEquity'] = AnnualEquity
+
+    # Fundamentals.loc['Debt to Equity Ratio']=(Statement.loc['annualCurrentLiabilities']+Statement.loc['annualTotalNonCurrentLiabilitiesNetMinorityInterest'])/AnnualEquity
+
+    Fundamentals.loc['Book Value'] = AnnualEquity / Statement.loc['annualOrdinarySharesNumber']
+
+    Fundamentals.loc['Price to Book Value'] = price / Fundamentals.loc['Book Value']
+    Fundamentals.loc['Price to Book Value at Year Reference Price'] = mean_price_per_year / Fundamentals.loc[
+        'Book Value']
+
+    Fundamentals.loc['Cash/ Total Assets'] = Statement.loc['annualCashAndCashEquivalents'] / Statement.loc[
+        'annualTotalAssets']
+
+    Fundamentals.loc['Cash per stock'] = Statement.loc['annualCashAndCashEquivalents'] / Statement.loc[
+        'annualOrdinarySharesNumber']
     try:
         AnnualInterestExpense = Statement.loc['annualInterestExpense']
     except:
         AnnualInterestExpense = Statement.loc['annualEBIT'] - Statement.loc['annualNetIncome'] - Statement.loc[
             'annualTaxProvision']
 
-    Fundamentals.loc['Debt to Equity Ratio'] = (Statement.loc['annualCurrentLiabilities'] + Statement.loc[
-        'annualTotalNonCurrentLiabilitiesNetMinorityInterest']) / AnnualEquity
-
     try:
-        Fundamentals.loc['Quick ratio / acid test ratio'] = (Statement.loc['annualAccountsReceivable'] + Statement.loc[
-            'annualCashAndCashEquivalents']) / Statement.loc['annualCurrentLiabilities']
-    except:
-        Fundamentals.loc['Quick ratio / acid test ratio'] = (Statement.loc['annualCashAndCashEquivalents']) / \
-                                                            Statement.loc['annualCurrentLiabilities']
 
-    Fundamentals.loc['Current ratio'] = Statement.loc['annualCurrentAssets'] / Statement.loc['annualCurrentLiabilities']
-
-    Fundamentals.loc['Book Value'] = AnnualEquity / Statement.loc['annualOrdinarySharesNumber']
-
-    Fundamentals.loc['Price to Book Value'] = price / Fundamentals.loc['Book Value']
-
-    Fundamentals.loc['Cash/ Current Assets'] = Statement.loc['annualCashAndCashEquivalents'] / Statement.loc[
-        'annualCurrentAssets']
-
-    Fundamentals.loc['Cash per stock'] = Statement.loc['annualCashAndCashEquivalents'] / Statement.loc[
-        'annualOrdinarySharesNumber']
-
-    Fundamentals.loc['Debt Quality Ratio'] = Statement.loc['annualCurrentLiabilities'] / (
+        Fundamentals.loc['Debt Quality Ratio'] = Statement.loc['annualCurrentLiabilities'] / (
                 Statement.loc['annualCurrentLiabilities'] + Statement.loc[
             'annualTotalNonCurrentLiabilitiesNetMinorityInterest'])
+        Fundamentals.loc['DSCR Asset Coverage Ratio'] = (Statement.loc['annualTotalAssets'] - Statement.loc[
+            'annualCurrentLiabilities']) / Statement.loc['annualTotalLiabilitiesNetMinorityInterest']
+        Fundamentals.loc['Current ratio'] = Statement.loc['annualCurrentAssets'] / Statement.loc[
+            'annualCurrentLiabilities']
+        Fundamentals.loc['Liabilities to Assets'] = Statement.loc['annualTotalLiabilitiesNetMinorityInterest'] / \
+                                                    Statement.loc['annualTotalAssets']
+        Fundamentals.loc['Liabilities to Equity'] = Statement.loc[
+                                                        'annualTotalLiabilitiesNetMinorityInterest'] / AnnualEquity
 
-    Fundamentals.loc['DSCR Asset Coverage Ratio'] = (Statement.loc['annualTotalAssets'] - Statement.loc[
-        'annualCurrentLiabilities']) / Statement.loc['annualTotalLiabilitiesNetMinorityInterest']
-
+        try:
+            Fundamentals.loc['Quick ratio / acid test ratio'] = (Statement.loc['annualAccountsReceivable'] +
+                                                                 Statement.loc[
+                                                                     'annualCashAndCashEquivalents']) / Statement.loc[
+                                                                    'annualCurrentLiabilities']
+        except:
+            Fundamentals.loc['Quick ratio / acid test ratio'] = (Statement.loc['annualCashAndCashEquivalents']) / \
+                                                                Statement.loc['annualCurrentLiabilities']
+    except:
+        pass
     # Income Ratios
 
     Fundamentals.loc['EPS'] = Statement.loc['annualNetIncome'] / Statement.loc['annualOrdinarySharesNumber']
 
-    Fundamentals.loc['ROCE Return On Capital Employed'] = Statement.loc['annualEBIT'] / (
-                Statement.loc['annualTotalAssets'] - Statement.loc['annualCurrentLiabilities'])
-
     Fundamentals.loc['ROA Return On Assets'] = Statement.loc['annualNetIncome'] / (Statement.loc['annualTotalAssets'])
-
     Fundamentals.loc['ROE Return On Equity'] = Statement.loc['annualNetIncome'] / AnnualEquity
+    Fundamentals.loc['ROIC Return On Invested Capital'] = Statement.loc['annualNetIncome'] / (
+                AnnualEquity + AnnualNetDebt)
+    Fundamentals.loc['Net Income Margin'] = Statement.loc['annualNetIncome'] / Statement.loc['annualOperatingRevenue']
+    try:
+        Fundamentals.loc['ROCE Return On Capital Employed'] = Statement.loc['annualEBIT'] / (
+                Statement.loc['annualTotalAssets'] - Statement.loc['annualCurrentLiabilities'])
+        Fundamentals.loc['EBITDA Margin'] = Statement.loc['annualNormalizedEBITDA'] / Statement.loc[
+            'annualOperatingRevenue']
+    except:
+        pass
 
     Fundamentals.loc['PER'] = price / Fundamentals.loc['EPS']
+    Fundamentals.loc['PER at Year Reference Price'] = mean_price_per_year / Fundamentals.loc['EPS']
 
     for i in range(len(Fundamentals.loc['PER'])):
         if Fundamentals.loc['PER'][Fundamentals.columns[i]] < 0:
             Fundamentals.loc['PER'][Fundamentals.columns[i]] = 100
+            Fundamentals.loc['PER at Year Reference Price'][Fundamentals.columns[i]] = 100
+
+    try:
+        Fundamentals.loc['FFO Funds From Operations per share'] = (Statement.loc['annualNetIncome'] \
+                                                                   + Statement.loc['annualDepreciationAndAmortization'] \
+                                                                   + Statement.loc[
+                                                                       'annualEarningsLossesFromEquityInvestments']) / \
+                                                                  Statement.loc['annualOrdinarySharesNumber']
+        Fundamentals.loc['PFFO'] = price / Fundamentals.loc['FFO Funds From Operations per share']
+        Fundamentals.loc['PFFO at Year Reference Price'] = mean_price_per_year / Fundamentals.loc[
+            'FFO Funds From Operations per share']
+    except:
+        pass
 
     Fundamentals.loc['FCFS Free Cash Flow per Stock'] = Statement.loc['annualFreeCashFlow'] / Statement.loc[
         'annualOrdinarySharesNumber']
@@ -259,74 +342,64 @@ def fundamental_analysis (ticker_name):
     Fundamentals.loc['EV Enterprise Value'] = price * Statement.loc['annualOrdinarySharesNumber'] + AnnualNetDebt
     Fundamentals.loc['EV Enterprise Value USD'] = Fundamentals.loc[
                                                       'EV Enterprise Value'] * currency_to_usd_conversion_factor
-    Fundamentals.loc['EV Enterprise Value / EBITDA'] = Fundamentals.loc['EV Enterprise Value'] / Statement.loc[
-        'annualNormalizedEBITDA']
-    Fundamentals.loc['EV Enterprise Value / EBIT'] = Fundamentals.loc['EV Enterprise Value'] / Statement.loc[
-        'annualEBIT']
 
-    for i in range(len(Fundamentals.loc['EV Enterprise Value'])):
-        Fundamentals.loc['EV Enterprise Value at Year Reference Price'][Fundamentals.columns[i]] = mean_price_per_year[
-                                                                                                       i] * \
-                                                                                                   Statement.loc[
-                                                                                                       'annualOrdinarySharesNumber'].iloc[
-                                                                                                       i] + \
-                                                                                                   AnnualNetDebt.iloc[i]
+    try:
+        Fundamentals.loc['EV Enterprise Value / EBITDA'] = Fundamentals.loc['EV Enterprise Value'] / Statement.loc[
+            'annualNormalizedEBITDA']
+        Fundamentals.loc['EV Enterprise Value / EBIT'] = Fundamentals.loc['EV Enterprise Value'] / Statement.loc[
+            'annualEBIT']
 
-    Fundamentals.loc['EV Enterprise Value / EBITDA at Year Reference Price'] = Fundamentals.loc[
-                                                                                   'EV Enterprise Value at Year Reference Price'] / \
-                                                                               Statement.loc['annualNormalizedEBITDA']
+        for i in range(len(Fundamentals.loc['EV Enterprise Value'])):
+            Fundamentals.loc['EV Enterprise Value at Year Reference Price'][Fundamentals.columns[i]] = \
+            mean_price_per_year[
+                i] * \
+            Statement.loc[
+                'annualOrdinarySharesNumber'].iloc[
+                i] + \
+            AnnualNetDebt.iloc[i]
 
-    Fundamentals.loc['P/CF Price/ Operating Cash Flow Rate'] = price / Fundamentals.loc[
-        'PFCF Price/ Free Cash Flow per Stock']
+        Fundamentals.loc['EV Enterprise Value / EBITDA at Year Reference Price'] = Fundamentals.loc[
+                                                                                       'EV Enterprise Value at Year Reference Price'] / \
+                                                                                   Statement.loc[
+                                                                                       'annualNormalizedEBITDA']
+        Fundamentals.loc['EV Enterprise Value / EBIT at Year Reference Price'] = Fundamentals.loc[
+                                                                                     'EV Enterprise Value at Year Reference Price'] / \
+                                                                                 Statement.loc['annualEBIT']
 
-    Fundamentals.loc['Interest Expense/ EBIT'] = AnnualInterestExpense / Statement.loc['annualEBIT']
+        Fundamentals.loc['P/CF Price/ Operating Cash Flow Rate'] = price / Fundamentals.loc[
+            'PFCF Price/ Free Cash Flow per Stock']
+        Fundamentals.loc['Interest Expense/ EBIT'] = AnnualInterestExpense / Statement.loc['annualEBIT']
+        Fundamentals.loc['Net Debt to EBITDA'] = AnnualNetDebt / Statement.loc['annualNormalizedEBITDA']
+        Fundamentals.loc['Net Debt to Operating Cash Flow'] = AnnualNetDebt / Statement.loc['annualOperatingCashFlow']
 
-    Fundamentals.loc['Net Debt to EBITDA'] = AnnualNetDebt / Statement.loc['annualNormalizedEBITDA']
+    except:
+        pass
 
-    ## Tendency --> To be simplfied to a for loop , stay DRY - Don't Repeat Yourself
+    ## TENDENCY ##
+    # enum years [0,n] to generate x axis for tendency
     x = []
     for i in range(0, len(Statement.columns)):
         x.append(i)
 
-    A = np.vstack([x, np.ones(len(x))]).T
+    x_axis_matrix = np.vstack([x, np.ones(len(x))]).T
 
-    m, c = np.linalg.lstsq(A, Statement.loc['annualNormalizedEBITDA'][::-1], rcond=-1)[0]
-    if Statement.loc['annualNormalizedEBITDA'].values[-1] > 0:
-        Fundamentals.loc['EBITDA tendency'] = m / Statement.loc['annualNormalizedEBITDA'].values[-1]
-    else:
-        Fundamentals.loc['EBITDA tendency'] = m / Statement.loc['annualNormalizedEBITDA'].mean()
+    tendency_dict = {
+        'Net income tendency': 'annualNetIncome',
+        'Free Cash Flow tendency': 'annualFreeCashFlow',
+        'Operating Revenue tendency': 'annualOperatingRevenue',
+        'Equity tendency': 'annualStockholdersEquity',
+        'Operating Cash Flow tendency': 'annualOperatingCashFlow',
+        'EBITDA tendency': 'annualNormalizedEBITDA'
+    }
 
-    m, c = np.linalg.lstsq(A, Statement.loc['annualNetIncome'][::-1], rcond=-1)[0]
-    if Statement.loc['annualNetIncome'].values[-1] > 0:
-        Fundamentals.loc['Net income tendency'] = m / Statement.loc['annualNetIncome'].values[-1]
-    else:
-        Fundamentals.loc['Net income tendency'] = m / Statement.loc['annualNetIncome'].mean()
+    if CompanyVariables['Sector'] == 'Financial Services': tendency_dict.popitem()
 
-    m, c = np.linalg.lstsq(A, Statement.loc['annualFreeCashFlow'][::-1], rcond=-1)[0]
-
-    if Statement.loc['annualNetIncome'].values[-1] > 0:
-        Fundamentals.loc['Free Cash Flow tendency'] = m / Statement.loc['annualFreeCashFlow'].values[-1]
-    else:
-        Fundamentals.loc['Free Cash Flow tendency'] = m / Statement.loc['annualFreeCashFlow'].mean()
-
-    m, c = np.linalg.lstsq(A, AnnualEquity[::-1], rcond=-1)[0]
-    if Statement.loc['annualNetIncome'].values[-1] > 0:
-        Fundamentals.loc['Equity tendency'] = m / AnnualEquity.values[-1]
-    else:
-        Fundamentals.loc['Equity tendency'] = m / AnnualEquity.mean()
-
-    try:
-        m, c = np.linalg.lstsq(A, Statement.loc['annualOperatingCashFlow'][::-1], rcond=-1)[0]
-        if Statement.loc['annualNetIncome'].values[-1] > 0:
-            Fundamentals.loc['Operating Cash Flow tendency'] = m / Statement.loc['annualOperatingCashFlow'].values[-1]
-        else:
-            Fundamentals.loc['Operating Cash Flow tendency'] = m / Statement.loc['annualOperatingCashFlow'].mean()
-    except:
-        Fundamentals.loc['Operating Cash Flow tendency'] = 0
+    for key in tendency_dict:
+        calculate_tendency(tendency_dict[key], key, x_axis_matrix)
 
     ## Discounted Cash Flows
 
-    RiskFreeReturnTreasuryUSA10YearsInterest = 0.035  # 3.5% US 10 years bond yield
+    RiskFreeReturnTreasuryUSA10YearsInterest = 0.05  # 5% US 10 years bond yield
     HistoricalSP500Return = 0.08
     DCFYears = 5
 
@@ -336,7 +409,7 @@ def fundamental_analysis (ticker_name):
         Fundamentals.loc['Tax Rate'] = Statement.loc['annualTaxRateForCalcs']
     except:
         Fundamentals.loc['Tax Rate'] = Statement.loc['annualTaxProvision'] / (
-                    Statement.loc['annualNetIncome'] + Statement.loc['annualTaxProvision'])
+                Statement.loc['annualNetIncome'] + Statement.loc['annualTaxProvision'])
 
     for i in range(len(Fundamentals.loc['Tax Rate']) - 1):
         if Fundamentals.loc['Tax Rate'][Fundamentals.columns[i]] < 0 or Fundamentals.loc['Tax Rate'][
@@ -363,66 +436,105 @@ def fundamental_analysis (ticker_name):
         dividend_yield = 0
 
     Fundamentals.loc['ERP Equity Risk Premium'] = Beta * (
-                HistoricalSP500Return - RiskFreeReturnTreasuryUSA10YearsInterest)  # Equity Risk Premium(ERP) - Excess return that investing in the stock market provides over a risk-free rate --> Free Risk Rate + Beta * (Market Rate of Return - Risk Free Rate of Return)
+            HistoricalSP500Return - RiskFreeReturnTreasuryUSA10YearsInterest)  # Equity Risk Premium(ERP) - Excess return that investing in the stock market provides over a risk-free rate --> Free Risk Rate + Beta * (Market Rate of Return - Risk Free Rate of Return)
     Fundamentals.loc['Cost of Equity CAPM Formula'] = RiskFreeReturnTreasuryUSA10YearsInterest + Beta * (
-                HistoricalSP500Return - RiskFreeReturnTreasuryUSA10YearsInterest)  # Cost of equity (CAPM Formula) --> Free Risk Rate + Beta * (Market Rate of Return - Risk Free Rate of Return)
+            HistoricalSP500Return - RiskFreeReturnTreasuryUSA10YearsInterest)  # Cost of equity (CAPM Formula) --> Free Risk Rate + Beta * (Market Rate of Return - Risk Free Rate of Return)
     Fundamentals.loc['Weighted Average Maturity'] = 1 + (1 - Fundamentals.loc['Debt Quality Ratio']) * 10
     Fundamentals.loc['Market Value of Debt'] = AnnualInterestExpense * ((
-                1 - pow(1 / (1 + Fundamentals.loc['After Tax Cost of Debt']),
-                        Fundamentals.loc['Weighted Average Maturity']))) + AnnualNetDebt / (
+            1 - pow(1 / (1 + Fundamentals.loc['After Tax Cost of Debt']),
+                    Fundamentals.loc['Weighted Average Maturity']))) + AnnualNetDebt / (
                                                    pow((1 + Fundamentals.loc['After Tax Cost of Debt']),
                                                        Fundamentals.loc['Weighted Average Maturity']))
     Fundamentals.loc['Market Value of Equity'] = price * Statement.loc['annualOrdinarySharesNumber'].iloc[0]
     WeightOfEquity = Fundamentals.loc['Market Value of Equity'] / (
-                Fundamentals.loc['Market Value of Equity'] + Fundamentals.loc['Market Value of Debt'])
+            Fundamentals.loc['Market Value of Equity'] + Fundamentals.loc['Market Value of Debt'])
     WeightOfDebt = Fundamentals.loc['Market Value of Debt'] / (
-                Fundamentals.loc['Market Value of Equity'] + Fundamentals.loc['Market Value of Debt'])
-    Fundamentals.loc['WACC Weighed Average Cost of Capital'] = WeightOfEquity * Fundamentals.loc[
-        'Cost of Equity CAPM Formula'] + WeightOfDebt * Fundamentals.loc['After Tax Cost of Debt']
+            Fundamentals.loc['Market Value of Equity'] + Fundamentals.loc['Market Value of Debt'])
+
+    if CompanyVariables['Sector'] == 'Financial Services':
+        Fundamentals.loc['WACC Weighed Average Cost of Capital'] = Fundamentals.loc['Cost of Equity CAPM Formula']
+    else:
+        Fundamentals.loc['WACC Weighed Average Cost of Capital'] = WeightOfEquity * Fundamentals.loc[
+            'Cost of Equity CAPM Formula'] + WeightOfDebt * Fundamentals.loc['After Tax Cost of Debt']
 
     WACC = Fundamentals.loc['WACC Weighed Average Cost of Capital'][Fundamentals.columns[0]]
 
     DCFFuture = []
-    if Fundamentals.loc['Free Cash Flow tendency'][Fundamentals.columns[0]] > 0.2 and \
-            Fundamentals.loc['EBITDA tendency'][Fundamentals.columns[0]] > 0.2:
-        # DCF for high growth stocks
-        DCFFuture.append(Statement.loc['annualFreeCashFlow'][Statement.columns[0]])
-    elif len(statement_years) >= 4:
-        DCFFuture.append(
-            Statement.loc['annualFreeCashFlow'][Statement.columns[0]] * 0.5 + Statement.loc['annualFreeCashFlow'][
-                Statement.columns[1]] * 0.3 + Statement.loc['annualFreeCashFlow'][Statement.columns[2]] * 0.15 +
-            Statement.loc['annualFreeCashFlow'][Statement.columns[3]] * 0.05)
-    elif len(statement_years) == 3:
-        DCFFuture.append(
-            Statement.loc['annualFreeCashFlow'][Statement.columns[0]] * 0.6 + Statement.loc['annualFreeCashFlow'][
-                Statement.columns[1]] * 0.3 + Statement.loc['annualFreeCashFlow'][Statement.columns[2]] * 0.1)
+    # DCF initial value and tendency
+
+    try:
+        expected_growth = float(expected_growth) * 0.01
+        if isinstance(expected_growth, float):
+            expectedGrowthDataBase = pd.Series({
+                'Ticker': ticker_name,
+                'ExpectedGrowth': expected_growth * 100
+            })
+            expectedGrowthDataBase = expectedGrowthDataBase.to_frame().T
+            df_to_exisiting_sql_db(expectedGrowthOld, expectedGrowthDataBase, 'ExpectedGrowth')
+    except:
+        pass
+
+    if CompanyVariables['Sector'] == 'Financial Services':  # banking, insurance ...
+        DCFFuture.append(Statement.loc['annualNetIncome'].mean() * 0.5)
+        if isinstance(expected_growth, float):
+            tendency = expected_growth
+        else:
+            tendency = np.minimum(Fundamentals.loc['Equity tendency'].iloc[0], 0.4)
+    elif cyclical:  # oil and gas, mining ...
+        DCFFuture.append(Statement.loc['annualFreeCashFlow'].mean())
+
+        if isinstance(expected_growth, float):
+            tendency = expected_growth
+        else:
+            tendency = np.minimum(Fundamentals.loc['Equity tendency'].iloc[0], 0.3)
+    else:
+        DCFFuture.append(Statement.loc['annualFreeCashFlow'].iloc[0])
+        if isinstance(expected_growth, float):
+            tendency = expected_growth
+        else:
+            tendency = np.minimum(Fundamentals.loc['EBITDA tendency'].iloc[0], 0.5)
 
     for i in range(DCFYears):
         if DCFFuture[0] > 0 and i > 0:
-            DCFFuture.append(DCFFuture[i - 1] * (1 + Fundamentals.loc['EBITDA tendency'][Statement.columns[0]]))
+            DCFFuture.append(DCFFuture[i - 1] * (1 + tendency))
             print(DCFFuture[i])
         elif i > 0:
-            DCFFuture.append(DCFFuture[i - 1] * (1 - Fundamentals.loc['EBITDA tendency'][Statement.columns[0]]))
+            DCFFuture.append(DCFFuture[i - 1] * (1 - tendency))
 
     DCFFuture = np.array(DCFFuture)
     DCFPresent = DCFFuture / ((1 + WACC) ** DCFYears)
 
-    if Fundamentals.loc['EV Enterprise Value / EBITDA at Year Reference Price'].mean(axis=0) < 7.5:
-        EBITDAExitMultiple = Fundamentals.loc['EV Enterprise Value / EBITDA at Year Reference Price'].mean(axis=0)
-    elif (Fundamentals.loc['EV Enterprise Value / EBITDA at Year Reference Price'].mean(axis=0) > 9 and
-          Fundamentals.loc['ROA Return On Assets'][Fundamentals.columns[0]] > 0.15 and
-          Fundamentals.loc['Net Debt to EBITDA'][Fundamentals.columns[0]] < 1):
-        # premium for highly profitable companies: High ROA > 15% AND Low debt (Net debt to Ebitda< 1)
-        EBITDAExitMultiple = 9
+    if CompanyVariables['Sector'] == 'Financial Services':
+        if Fundamentals.loc['Price to Book Value at Year Reference Price'].mean(axis=0) < 0.6:
+            exit_multiple = 0.7
+            DCFExitValue = exit_multiple * (
+                Fundamentals.loc['Price to Book Value at Year Reference Price'].mean(axis=0)) * \
+                           AnnualEquity.iloc[0]
+        else:
+            exit_multiple = 0.7
+            DCFExitValue = exit_multiple * 0.6 * AnnualEquity.iloc[0]
+
     else:
-        EBITDAExitMultiple = 7.5
+        if cyclical:
+            exit_multiple = Fundamentals.loc['EV Enterprise Value / EBITDA at Year Reference Price'].mean(axis=0)
+            DCFExitValue = exit_multiple * Statement.loc['annualNormalizedEBITDA'].mean(axis=0)
 
-    DCFExitMultiple = EBITDAExitMultiple * (Statement.loc['annualNormalizedEBITDA'][Fundamentals.columns[0]])
+        elif Fundamentals.loc['EV Enterprise Value / EBITDA at Year Reference Price'].mean(axis=0) < 7.5:
+            exit_multiple = Fundamentals.loc['EV Enterprise Value / EBITDA at Year Reference Price'].mean(axis=0)
+            DCFExitValue = exit_multiple * (Statement.loc['annualNormalizedEBITDA'][Fundamentals.columns[0]])
 
-    DCFTotalFirmValue = np.sum(DCFPresent) + DCFExitMultiple  # Risk of COMPLEX Number
+        elif (Fundamentals.loc['EV Enterprise Value / EBITDA at Year Reference Price'].mean(axis=0) > 9 and
+              Fundamentals.loc['ROA Return On Assets'][Fundamentals.columns[0]] > 0.15 and
+              Fundamentals.loc['Net Debt to EBITDA'][Fundamentals.columns[0]] < 1):
+            # premium for highly profitable companies: High ROA > 15% AND Low debt (Net debt to Ebitda< 1)
+            exit_multiple = 9
+            DCFExitValue = exit_multiple * (Statement.loc['annualNormalizedEBITDA'][Fundamentals.columns[0]])
+        else:
+            exit_multiple = 7.5
+            DCFExitValue = exit_multiple * (Statement.loc['annualNormalizedEBITDA'][Fundamentals.columns[0]])
 
-    DCFResidualValue = DCFTotalFirmValue - AnnualNetDebt[AnnualNetDebt.index[0]]
-    DCFTargetPrice = DCFResidualValue / Statement.loc['annualOrdinarySharesNumber'].iloc[0]
+    DCFTotalFirmValue = np.sum(DCFPresent) + DCFExitValue - AnnualNetDebt.iloc[0]  # Risk of COMPLEX Number
+    DCFTargetPrice = DCFTotalFirmValue / Statement.loc['annualOrdinarySharesNumber'].iloc[0]
 
     # Multiple valuation weights
 
@@ -457,7 +569,7 @@ def fundamental_analysis (ticker_name):
         net_debt_to_ebitda_weight = 1
 
     if Fundamentals.loc['Interest Expense/ EBIT'][Fundamentals.columns[0]] > 0.7:
-        debt_coverage_weight = 0.92
+        debt_coverage_weight = 0.9
     else:
         debt_coverage_weight = 1
 
@@ -471,7 +583,51 @@ def fundamental_analysis (ticker_name):
     else:
         enterprise_size_weight = 1
 
-    saleTargetPrice = DCFTargetPrice * cash_flow_stability_weight * net_debt_to_ebitda_weight * debt_coverage_weight * price_to_book_weight * enterprise_size_weight
+    target_price = DCFTargetPrice * cash_flow_stability_weight * net_debt_to_ebitda_weight * debt_coverage_weight * price_to_book_weight * enterprise_size_weight
+
+    # SCORES
+
+    # Debt score [0-1] #TODO make dependent on sector
+    debt_score = \
+        0.34 * (3 - np.minimum(3, Fundamentals.loc['Net Debt to EBITDA'].iloc[0])) / 3 + \
+        0.33 * (6 - np.minimum(6, Fundamentals.loc['Net Debt to Operating Cash Flow'].iloc[0])) / 6 + \
+        0.33 * (0.7 - np.minimum(0.7, Fundamentals.loc['Interest Expense/ EBIT'].iloc[0])) / 0.7
+
+    # Growth score [0-1] -- 25% optimal growth
+    growth_score = ( \
+                               0.2 * np.maximum(-0.25, np.minimum(0.25, Fundamentals.loc['EBITDA tendency'].iloc[0])) + \
+                               0.15 * np.maximum(-0.25,
+                                                 np.minimum(0.25,
+                                                            Fundamentals.loc['Free Cash Flow tendency'].iloc[0])) + \
+                               0.15 * np.maximum(-0.25, np.minimum(0.25,
+                                                                   Fundamentals.loc[
+                                                                       'Operating Cash Flow tendency'].iloc[
+                                                                       0])) + \
+                               0.15 * np.maximum(-0.25,
+                                                 np.minimum(0.25, Fundamentals.loc['Net income tendency'].iloc[0])) + \
+                               0.15 * np.maximum(-0.25, np.minimum(0.25, Fundamentals.loc['Equity tendency'].iloc[0])) \
+                       ) / 0.25
+
+    # Earnings multiple score #TODO make dependent on sector
+    earnigns_score = \
+        0.3 * (30 - np.maximum(0, np.minimum(25, Fundamentals.loc['PER'].iloc[0] - 5))) / 25 + \
+        0.4 * (30 - np.maximum(0,
+                               np.minimum(25,
+                                          Fundamentals.loc['PFCF Price/ Free Cash Flow per Stock'].iloc[0] - 5))) / 25 + \
+        0.4 * (15 - np.maximum(0, np.minimum(15, Fundamentals.loc['EV Enterprise Value / EBITDA'].iloc[0] - 3))) / 15
+
+    # Value score
+    value_score = \
+        np.minimum(1, target_price / price - 1)
+
+    # Profitability score #TODO make dependent on sector
+    profitability_score = \
+        0.2 * np.minimum(0.3, (Fundamentals.loc['ROE Return On Equity'].iloc[0])) / 0.3 + \
+        0.1 * np.minimum(0.3, (Fundamentals.loc['ROCE Return On Capital Employed'].iloc[0])) / 0.3 + \
+        0.2 * np.minimum(0.2, (Fundamentals.loc['ROA Return On Assets'].iloc[0])) / 0.2 + \
+        0.1 * np.minimum(0.2, (Fundamentals.loc['ROIC Return On Invested Capital'].iloc[0])) / 0.2 + \
+        0.2 * np.minimum(0.2, (Fundamentals.loc['Net Income Margin'].iloc[0])) / 0.3 + \
+        0.2 * np.minimum(0.2, (Fundamentals.loc['EBITDA Margin'].iloc[0])) / 0.4
 
     # Variables to be stored in the database
 
@@ -485,11 +641,12 @@ def fundamental_analysis (ticker_name):
         'StockCurrency': CompanyVariables['StockCurrency'],
         'ReportCurrency': CompanyVariables['ReportCurrency'],
         'CurrentPER': Fundamentals.loc['PER'][Fundamentals.columns[0]],
-        'MeanPER': Fundamentals.loc['PER'].mean(axis=0),
+        'MeanPER': Fundamentals.loc['PER at Year Reference Price'].mean(axis=0),
+        'CurrentPricetoBook': Fundamentals.loc['Price to Book Value'][Fundamentals.columns[0]],
+        'MeanPricetoBook': Fundamentals.loc['Price to Book Value at Year Reference Price'].mean(axis=0),
         'CurrentEVEBITDA': Fundamentals.loc['EV Enterprise Value / EBITDA'][Fundamentals.columns[0]],
         'MeanEVEBITDA': Fundamentals.loc['EV Enterprise Value / EBITDA at Year Reference Price'].mean(axis=0),
         'CurrentEVEBIT': Fundamentals.loc['EV Enterprise Value / EBIT'][Fundamentals.columns[0]],
-        'CurrentPricetoBook': Fundamentals.loc['Price to Book Value'][Fundamentals.columns[0]],
         'CurrentPricetoFreeCashFlowRate': Fundamentals.loc['PFCF Price/ Free Cash Flow per Stock'][
             Fundamentals.columns[0]],
         'MeanPricetoFreeCashFlowRate': Fundamentals.loc[
@@ -498,44 +655,77 @@ def fundamental_analysis (ticker_name):
         'ROE': Fundamentals.loc['ROE Return On Equity'][Fundamentals.columns[0]],
         'ROCE': Fundamentals.loc['ROCE Return On Capital Employed'][Fundamentals.columns[0]],
         'ROA': Fundamentals.loc['ROA Return On Assets'][Fundamentals.columns[0]],
+        'ROIC': Fundamentals.loc['ROIC Return On Invested Capital'][Fundamentals.columns[0]],
         'Beta': Beta,
-        'LiquidityRatio': Fundamentals.loc['Cash/ Current Assets'][Fundamentals.columns[0]],
+        'WACC': WACC,
+        'CashToTotalAssets': Fundamentals.loc['Cash/ Total Assets'][Fundamentals.columns[0]],
         'CashOverStockPrice': Fundamentals.loc['Cash per stock'][Fundamentals.columns[0]] / price,
         'DebtQualityRatio': Fundamentals.loc['Debt Quality Ratio'][Fundamentals.columns[0]],
-        'LiabilitiestoEquityRatio': Fundamentals.loc['Debt to Equity Ratio'][Fundamentals.columns[0]],
+        'LiabilitiestoEquityRatio': Fundamentals.loc['Liabilities to Equity'][Fundamentals.columns[0]],
         'NetDebttoEBITDA': Fundamentals.loc['Net Debt to EBITDA'][Fundamentals.columns[0]],
         'MeanNetDebttoEBITDA': Fundamentals.loc['Net Debt to EBITDA'].mean(axis=0),
         'InterestExpensetoEBIT': Fundamentals.loc['Interest Expense/ EBIT'][Fundamentals.columns[0]],
         'EntrepriseValueUSD': Fundamentals.loc['EV Enterprise Value USD'][Fundamentals.columns[0]],
-        'DCFValuewithExitMultiplePotential': (DCFTargetPrice / price - 1),
+        'DCFValuewithExitMultiplePotential': (target_price / price - 1),
         'EBITDATendency': Fundamentals.loc['EBITDA tendency'][Fundamentals.columns[0]],
         'FreeCashFlowTendency': Fundamentals.loc['Free Cash Flow tendency'][Fundamentals.columns[0]],
         'OperatingCashFlowTendency': Fundamentals.loc['Operating Cash Flow tendency'][Fundamentals.columns[0]],
         'NetIncomeTendency': Fundamentals.loc['Net income tendency'][Fundamentals.columns[0]],
         'EquityTendency': Fundamentals.loc['Equity tendency'][Fundamentals.columns[0]],
         'DividendYield': dividend_yield,
-        'TargetPrice': saleTargetPrice,
+        'NetIncomeMargin': Fundamentals.loc['Net Income Margin'][Fundamentals.columns[0]],
+        'EBITDAMargin': Fundamentals.loc['EBITDA Margin'][Fundamentals.columns[0]],
+        'TargetPrice': target_price,
+        'PFFO': Fundamentals.loc['PFFO'][Fundamentals.columns[0]],
+        'MeanPFFO': Fundamentals.loc['PFFO at Year Reference Price'].mean(axis=0),
+        'LastUpdate': datetime.datetime.now().strftime("%Y-%m-%d"),
+        'FirstYearReport': str(Statement.columns[-1])
+    })
+
+    simpleAnalysisDataBase = pd.Series({
+        'Ticker': ticker_name,
+        'CompanyName': CompanyVariables['CompanyName'],
+        'Sector': CompanyVariables['Industry'],
+        'Potential': (target_price / price - 1),
+        'TargetPrice': target_price,
+        'EarningsScore': earnigns_score,
+        'DebtQualityScore': debt_score,
+        'GrowthScore': growth_score
     })
 
     FundamentalmentalAnalysisDataBase = FundamentalmentalAnalysisDataBase.to_frame().T
-    # FundamentalmentalAnalysisDataBase=FundamentalmentalAnalysisDataBase.set_index(['Ticker'])
+    simpleAnalysisDataBase = simpleAnalysisDataBase.to_frame().T
 
     ## save fundamental analysis into the database
-    try:
-        if ticker_name in FundamentalAnalysisOld['Ticker'].tolist():
-            print(FundamentalAnalysisOld['Ticker'])
-            TickerToUpdateIndex = FundamentalAnalysisOld['Ticker'].tolist().index(ticker_name)
-            FundamentalAnalysisOld.loc[TickerToUpdateIndex] = FundamentalmentalAnalysisDataBase.loc[0]
-            FundamentalAnalysisOld.to_sql("FundamentalAnalysis", conn, if_exists='replace', index=False)
-        else:
-            FundamentalmentalAnalysisDataBase.to_sql("FundamentalAnalysis", conn, if_exists='append', index=False)
-    except:
-        FundamentalmentalAnalysisDataBase.to_sql("FundamentalAnalysis", conn, if_exists='append', index=False)
-        print('Could not connect to db')
+
+    df_to_exisiting_sql_db(FundamentalAnalysisOld, FundamentalmentalAnalysisDataBase, 'FundamentalAnalysis')
+    df_to_exisiting_sql_db(simpleAnalysisOld, simpleAnalysisDataBase, 'SimpleAnalysis')
+
+    # try:
+    #     if ticker_name in FundamentalAnalysisOld['Ticker'].tolist():
+    #         print(FundamentalAnalysisOld['Ticker'])
+    #         TickerToUpdateIndex = FundamentalAnalysisOld['Ticker'].tolist().index(ticker_name)
+    #         FundamentalAnalysisOld.loc[TickerToUpdateIndex] = FundamentalmentalAnalysisDataBase.loc[0]
+    #         FundamentalAnalysisOld.to_sql("FundamentalAnalysis", conn, if_exists='replace', index=False)
+    #     else:
+    #         FundamentalmentalAnalysisDataBase.to_sql("FundamentalAnalysis", conn, if_exists='append', index=False)
+    # except:
+    #     print('Could not connect to db')
+    #
+    # if ticker_name in simpleAnalysisOld['Ticker'].tolist():
+    #     print(simpleAnalysisOld['Ticker'])
+    #     TickerToUpdateIndex = simpleAnalysisOld['Ticker'].tolist().index(ticker_name)
+    #     simpleAnalysisOld.loc[TickerToUpdateIndex] = simpleAnalysisDataBase.loc[0]
+    #     simpleAnalysisOld.to_sql("SimpleAnalysis", conn, if_exists='replace', index=False)
+    # else:
+    #     simpleAnalysisDataBase.to_sql("SimpleAnalysis", conn, if_exists='append', index=False)
 
     record = cur.fetchall()
     cur.close()
     conn.commit()
     conn.close()
-    print("The SQLite connection is closed")
 
+    print("The SQLite connection is closed")
+    print(ticker_name, '-  TARGET PRICE : ', target_price)
+
+    return target_price

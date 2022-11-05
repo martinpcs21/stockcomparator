@@ -34,14 +34,14 @@ try:
 except sqlite3.Error as error:
     print("Error while connecting to sqlite", error)
 
-fundamental_analysis_query = get_select_query_string(table='FundamentalAnalysis')
-existing_tickers = pd.read_sql_query(fundamental_analysis_query, engine)
+existing_tickers_query = get_select_query_string(table='CurrentPrice')
+existing_tickers = pd.read_sql_query(existing_tickers_query, engine)
 existing_tickers= existing_tickers['Ticker'].values.tolist()
 #FundamentalAnalysis.fundamental_analysis
 updated_tickers_pointer=[]
 for ticker in existing_tickers:
     try:
-        FundamentalAnalysis.fundamental_analysis(ticker)
+        FundamentalAnalysis.fundamental_analysis(ticker, expected_growth='')
         print('Updated fundamental analysis for',ticker)
         updated_tickers_pointer.append(True)
     except:

@@ -368,6 +368,8 @@ def get_company_data(ticker_name):
     # Just be sure any changes have been committed or they will be lost.
     conn.close()
 
+    return income_statement, balance_sheet, cash_flow, company_variables
+
 
 
 

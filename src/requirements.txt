@@ -1,9 +1,10 @@
 pandas
 numpy
 bs4
-sqlalchemy
+sqlAlchemy
 sklearn
 yahooquery
 streamlit
-matplotlib
-pip
+uuid
+PyQt6
+pyuic6
