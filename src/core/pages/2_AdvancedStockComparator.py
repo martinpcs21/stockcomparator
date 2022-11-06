@@ -36,6 +36,7 @@ db_path = '/app/stockcomparator/src/db/Fundamentals.db'
 if not os.path.isfile(db_path):
     raise Exception("DB not found! SQLite .db file does not exist in folder: {0}".format(db_path))
 
+# For engine in SQLite : ////  -->  absoulte path ; /// --> relative path
 try:
     conn = sqlite3.connect(db_path)
     cur = conn.cursor()
