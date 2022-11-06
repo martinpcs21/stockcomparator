@@ -53,6 +53,7 @@ def fundamental_analysis (ticker_name, expected_growth):
     try:
         conn = sqlite3.connect(db_path)
         cur = conn.cursor()
+        print('db_path OK')
         engine = create_engine('sqlite:////app/stockcomparator/src/db/Fundamentals.db')
 
     except sqlite3.Error as error:
