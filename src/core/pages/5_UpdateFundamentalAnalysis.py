@@ -60,9 +60,9 @@ if st.button('Update Fundamental Analysis'):
         try:
             ticker = existing_tickers[i]
             progress_percent = float(i / len(existing_tickers))
-            st.write('Updated fundamental analysis for: ' + ticker)
             my_bar.progress(progress_percent)
             fundamental_analysis(ticker)
+            st.write('Updated fundamental analysis for: ' + ticker)
             print('Updated fundamental analysis for', ticker)
             updated_tickers_pointer.append(True)
         except:
